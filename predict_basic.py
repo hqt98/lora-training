@@ -1,6 +1,7 @@
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 import gc
 import torch
-from cog import BasePredictor, Input, Path
+import os
 from lora_diffusion.cli_lora_pti import train as lora_train
 
 from common import (
@@ -66,53 +67,55 @@ TASK_PARAMETERS = {
 }
 
 
-class Predictor(BasePredictor):
-    def predict(
-        self,
-        instance_data: Path = Input(
-            description="A ZIP file containing your training images (JPG, PNG, etc. size not restricted). These images contain your 'subject' that you want the trained model to embed in the output domain for later generating customized scenes beyond the training images. For best results, use images without noise or unrelated objects in the background.",
-        ),
-        task: str = Input(
-            default="face",
-            choices=["face", "object", "style"],
-            description="Type of LoRA model you want to train",
-        ),
-        seed: int = Input(description="A seed for reproducible training", default=None),
-        resolution: int = Input(
-            description="The resolution for input images. All the images in the train/validation dataset will be resized to this"
-            " resolution.",
-            default=512,
-        ),
-    ) -> Path:
-        if seed is None:
-            seed = random_seed()
-        print(f"Using seed: {seed}")
+# Parse command line arguments
+parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
+parser.add_argument("-i", "--instance_data", help="Instance data")
+parser.add_argument("-s", "--seed", help="Seed for reproducibility")
+parser.add_argument("-r", "--resolution", help="Resolution", default=512)
+parser.add_argument("-o", "--output_dir", help="Output dir", default='./output')
+parser.add_argument("-p", "--pretrained", help="Pretrained model name or path", default='./stable-diffusion-v1-5-cache')
 
-        cog_instance_data = "cog_instance_data"
-        cog_output_dir = "checkpoints"
-        clean_directories([cog_instance_data, cog_output_dir])
 
-        params = {k: v for k, v in TASK_PARAMETERS[task].items()}
-        params.update(COMMON_PARAMETERS)
-        params.update(
-            {
-                "pretrained_model_name_or_path": "./stable-diffusion-v1-5-cache",
-                "instance_data_dir": cog_instance_data,
-                "output_dir": cog_output_dir,
-                "resolution": resolution,
-                "seed": seed,
-            }
-        )
+args = vars(parser.parse_args())
 
-        extract_zip_and_flatten(instance_data, cog_instance_data)
 
-        lora_train(**params)
-        gc.collect()
-        torch.cuda.empty_cache()
+def train(self):
+    seed = args["seed"]
+    instance_data = args["instace_data"]
+    resolution = args["resolution"]
+    output_dir = args['output_dir']
+    pretrained = args['pretrained']
+    task = "face"
 
-        num_steps = COMMON_PARAMETERS["max_train_steps_tuning"]
-        weights_path = Path(cog_output_dir) / f"step_{num_steps}.safetensors"
-        output_path = Path(cog_output_dir) / get_output_filename(instance_data)
-        weights_path.rename(output_path)
+    if seed is None:
+        seed = random_seed()
+    print(f"Using seed: {seed}")
 
-        return output_path
+    instance_data = "instance_data"
+    output_dir = "checkpoints"
+    clean_directories([instance_data, output_dir])
+
+    params = {k: v for k, v in TASK_PARAMETERS[task].items()}
+    params.update(COMMON_PARAMETERS)
+    params.update(
+        {
+            "pretrained_model_name_or_path": pretrained,
+            "instance_data_dir": instance_data,
+            "output_dir": output_dir,
+            "resolution": resolution,
+            "seed": seed,
+        }
+    )
+
+    lora_train(**params)
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    num_steps = COMMON_PARAMETERS["max_train_steps_tuning"]
+    weights_path = output_dir + os.path.sep + f"step_{num_steps}.safetensors"
+   
+    return weights_path
+
+
+if __name__ == "main":
+    train()
